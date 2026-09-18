@@ -1,7 +1,7 @@
 'use client';
 
 import React, { useState, useEffect } from 'react';
-import { X, HelpCircle, Check, AlertCircle, ArrowRight, RotateCcw, Trophy, Award, Sparkles } from 'lucide-react';
+import { X, HelpCircle, Check, AlertCircle, ArrowRight, RotateCcw, Trophy, Award, Sparkles, RefreshCw } from 'lucide-react';
 import confetti from 'canvas-confetti';
 import { QuizItem } from '../types';
 
@@ -11,6 +11,8 @@ interface QuizModalProps {
   topicTitle: string;
   quizzes: QuizItem[];
   onFinishQuiz?: (score: number) => void;
+  goal?: string;
+  onUpdateQuizzes?: (updated: QuizItem[]) => void;
 }
 
 export const QuizModal: React.FC<QuizModalProps> = ({
@@ -19,12 +21,19 @@ export const QuizModal: React.FC<QuizModalProps> = ({
   topicTitle,
   quizzes,
   onFinishQuiz,
+  goal,
+  onUpdateQuizzes,
 }) => {
+  const [currentQuizzes, setCurrentQuizzes] = useState<QuizItem[]>(quizzes);
   const [currentIndex, setCurrentIndex] = useState(0);
   const [selectedOption, setSelectedOption] = useState<number | null>(null);
   const [isAnswerSubmitted, setIsAnswerSubmitted] = useState(false);
   const [userAnswers, setUserAnswers] = useState<number[]>([]);
   const [isFinished, setIsFinished] = useState(false);
+  const [isLoading, setIsLoading] = useState(false);
+  const [errorMessage, setErrorMessage] = useState<string | null>(null);
+
+
 
   // Handle escape key
   useEffect(() => {
@@ -37,10 +46,10 @@ export const QuizModal: React.FC<QuizModalProps> = ({
     return () => window.removeEventListener('keydown', handleKeyDown);
   }, [isOpen, onClose]);
 
-  if (!isOpen || !quizzes || quizzes.length === 0) return null;
+  if (!isOpen || !currentQuizzes || currentQuizzes.length === 0) return null;
 
-  const currentQuiz = quizzes[currentIndex];
-  const totalQuestions = quizzes.length;
+  const currentQuiz = currentQuizzes[currentIndex];
+  const totalQuestions = currentQuizzes.length;
 
   const handleSelectOption = (optionIndex: number) => {
     if (isAnswerSubmitted) return;
@@ -57,7 +66,7 @@ export const QuizModal: React.FC<QuizModalProps> = ({
     } else {
       // Finished all questions
       setIsFinished(true);
-      const correctCount = userAnswers.filter((ans, idx) => ans === quizzes[idx]?.answerIndex).length +
+      const correctCount = userAnswers.filter((ans, idx) => ans === currentQuizzes[idx]?.answerIndex).length +
         (selectedOption === currentQuiz.answerIndex ? 1 : 0);
       if (correctCount >= 3) {
         try {
@@ -84,9 +93,46 @@ export const QuizModal: React.FC<QuizModalProps> = ({
     setIsFinished(false);
   };
 
+  const handleRegenerateQuizzes = async () => {
+    setIsLoading(true);
+    setErrorMessage(null);
+    try {
+      const res = await fetch('/api/quiz', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({
+          topic: topicTitle,
+          goal,
+        }),
+      });
+
+      const data = await res.json();
+      if (!res.ok) {
+        if (data.error === 'MISSING_API_KEY') {
+          setErrorMessage('GEMINI_API_KEY가 설정되지 않았습니다. .env.local 파일에 키를 입력해주세요.');
+        } else {
+          setErrorMessage(data.message || '퀴즈 생성 중 오류가 발생했습니다.');
+        }
+        return;
+      }
+
+      if (data.quizzes && data.quizzes.length > 0) {
+        setCurrentQuizzes(data.quizzes);
+        handleRestart();
+        if (onUpdateQuizzes) {
+          onUpdateQuizzes(data.quizzes);
+        }
+      }
+    } catch {
+      setErrorMessage('네트워크 오류가 발생했습니다. 잠시 후 다시 시도해주세요.');
+    } finally {
+      setIsLoading(false);
+    }
+  };
+
   // Calculate final score
   const correctAnswersCount = userAnswers.reduce((acc, ans, idx) => {
-    return ans === quizzes[idx]?.answerIndex ? acc + 1 : acc;
+    return ans === currentQuizzes[idx]?.answerIndex ? acc + 1 : acc;
   }, 0);
 
   return (
@@ -112,7 +158,7 @@ export const QuizModal: React.FC<QuizModalProps> = ({
                 <span className="text-xs font-bold uppercase tracking-wider text-indigo-600 dark:text-indigo-400">
                   AI 실전 점검 퀴즈
                 </span>
-                {!isFinished && (
+                {!isFinished && !isLoading && (
                   <span className="text-xs px-2 py-0.5 rounded-full bg-indigo-50 dark:bg-indigo-900/50 text-indigo-700 dark:text-indigo-300 font-semibold">
                     {currentIndex + 1} / {totalQuestions}
                   </span>
@@ -124,18 +170,44 @@ export const QuizModal: React.FC<QuizModalProps> = ({
             </div>
           </div>
 
-          <button
-            onClick={onClose}
-            type="button"
-            className="p-2 rounded-xl text-slate-400 hover:text-slate-600 dark:hover:text-slate-200 hover:bg-slate-100 dark:hover:bg-slate-800 transition-colors cursor-pointer"
-            aria-label="닫기"
-          >
-            <X className="w-5 h-5" />
-          </button>
+          <div className="flex items-center space-x-2">
+            <button
+              onClick={handleRegenerateQuizzes}
+              disabled={isLoading}
+              type="button"
+              className="px-2.5 py-1.5 rounded-lg border border-indigo-200 dark:border-indigo-800 bg-white/80 dark:bg-slate-800 text-xs font-semibold text-indigo-700 dark:text-indigo-300 hover:bg-indigo-50 dark:hover:bg-indigo-950/60 flex items-center gap-1 transition-all disabled:opacity-50 cursor-pointer"
+              title="Gemini AI로 새로운 퀴즈 5문제 다시 출제하기"
+            >
+              <RefreshCw className={`w-3.5 h-3.5 ${isLoading ? 'animate-spin' : ''}`} />
+              <span className="hidden sm:inline">AI 새 문제</span>
+            </button>
+
+            <button
+              onClick={onClose}
+              type="button"
+              className="p-2 rounded-xl text-slate-400 hover:text-slate-600 dark:hover:text-slate-200 hover:bg-slate-100 dark:hover:bg-slate-800 transition-colors cursor-pointer"
+              aria-label="닫기"
+            >
+              <X className="w-5 h-5" />
+            </button>
+          </div>
         </div>
 
+        {/* Notice/Error Banner */}
+        {errorMessage && (
+          <div className="mx-5 sm:mx-6 mt-4 p-3 rounded-xl bg-rose-50 dark:bg-rose-950/40 border border-rose-200 dark:border-rose-800 text-rose-700 dark:text-rose-300 text-xs flex items-center justify-between">
+            <span>{errorMessage}</span>
+            <button
+              onClick={() => setErrorMessage(null)}
+              className="text-rose-500 hover:underline text-[11px] ml-2 shrink-0"
+            >
+              닫기
+            </button>
+          </div>
+        )}
+
         {/* Quiz Progress Bar */}
-        {!isFinished && (
+        {!isFinished && !isLoading && (
           <div className="w-full bg-slate-100 dark:bg-slate-800 h-1.5">
             <div
               className="bg-indigo-600 h-1.5 transition-all duration-300"
@@ -146,13 +218,20 @@ export const QuizModal: React.FC<QuizModalProps> = ({
 
         {/* Modal Body */}
         <div className="p-5 sm:p-6 overflow-y-auto space-y-5 text-sm">
-          {!isFinished ? (
+          {isLoading ? (
+            <div className="py-12 flex flex-col items-center justify-center space-y-3 text-slate-500">
+              <RefreshCw className="w-8 h-8 animate-spin text-indigo-600" />
+              <p className="text-sm font-semibold text-slate-700 dark:text-slate-200">
+                Gemini AI가 실전 대비 퀴즈 5문항과 상세 해설을 출제하고 있습니다...
+              </p>
+            </div>
+          ) : !isFinished ? (
             <>
               {/* Question */}
               <div className="p-4 rounded-xl bg-slate-50 dark:bg-slate-800/60 border border-slate-200/80 dark:border-slate-700">
                 <div className="flex items-center space-x-2 text-xs font-bold text-indigo-600 dark:text-indigo-400 mb-1.5">
                   <Sparkles className="w-3.5 h-3.5" />
-                  <span>Q{currentQuiz.id}.</span>
+                  <span>Q{currentQuiz.id || currentIndex + 1}.</span>
                 </div>
                 <h3 className="text-base sm:text-lg font-bold text-slate-900 dark:text-white leading-snug">
                   {currentQuiz.question}
@@ -269,7 +348,7 @@ export const QuizModal: React.FC<QuizModalProps> = ({
 
               {/* Score Breakdown Pills */}
               <div className="flex justify-center gap-2 max-w-sm mx-auto">
-                {quizzes.map((q, idx) => {
+                {currentQuizzes.map((q, idx) => {
                   const isUserCorrect = userAnswers[idx] === q.answerIndex;
                   return (
                     <div
@@ -303,7 +382,7 @@ export const QuizModal: React.FC<QuizModalProps> = ({
 
               <button
                 onClick={handleNext}
-                disabled={!isAnswerSubmitted}
+                disabled={!isAnswerSubmitted || isLoading}
                 type="button"
                 className="px-5 py-2.5 rounded-xl bg-indigo-600 hover:bg-indigo-700 disabled:opacity-50 disabled:cursor-not-allowed text-white font-semibold text-xs sm:text-sm transition-all shadow-md shadow-indigo-500/20 flex items-center gap-1.5 cursor-pointer"
               >
