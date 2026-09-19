@@ -1,6 +1,7 @@
 import { GoalPreset } from '../types';
+import { getUpcoming7Days } from '../lib/dateUtils';
 
-export const INITIAL_PRESETS: GoalPreset[] = [
+const RAW_PRESETS: GoalPreset[] = [
   {
     id: 'infosec',
     name: '정보처리기사 실기',
@@ -886,4 +887,20 @@ export const INITIAL_PRESETS: GoalPreset[] = [
     ]
   }
 ];
+
+const upcoming = getUpcoming7Days();
+
+export const INITIAL_PRESETS: GoalPreset[] = RAW_PRESETS.map((preset) => ({
+  ...preset,
+  days: preset.days.map((day, idx) => {
+    const info = upcoming[idx] || upcoming[0];
+    return {
+      ...day,
+      dayNumber: info.dayNumber,
+      dayOfWeek: info.dayOfWeek,
+      dateStr: info.dateStr,
+      isToday: info.isToday,
+    };
+  }),
+}));
 

@@ -11,6 +11,7 @@ import { ConceptModal } from '../components/ConceptModal';
 import { QuizModal } from '../components/QuizModal';
 import { PlanHistoryModal } from '../components/PlanHistoryModal';
 import { INITIAL_PRESETS } from '../data/mockData';
+import { getUpcoming7Days } from '../lib/dateUtils';
 import { DayPlan, Task, ConceptDetail, QuizItem } from '../types';
 import {
   SavedPlan,
@@ -165,7 +166,7 @@ export default function Home() {
       const res = await fetch('/api/plan', {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({ goal, hours }),
+        body: JSON.stringify({ goal, hours, clientDate: new Date().toISOString() }),
       });
 
       const data = await res.json();
@@ -188,161 +189,143 @@ export default function Home() {
       if (matchedPreset) {
         generatedDays = matchedPreset.days;
       } else {
-        generatedDays = [
+        const upcomingDays = getUpcoming7Days();
+        const fallbackTemplates = [
           {
-            dayOfWeek: '월',
-            dayNumber: 1,
-            dateStr: '10.19 (월)',
             title: `${goal} 기초 개념 및 오리엔테이션`,
-            isToday: false,
             tasks: [
               {
                 id: 'custom-1-1',
                 title: `${goal} 1단계: 핵심 용어 및 구조 파악`,
                 category: '기초 입문',
                 estimatedMinutes: 30,
-                difficulty: '초급',
-                completed: true,
+                difficulty: '초급' as const,
+                completed: false,
                 concept: {
                   topic: `${goal} 핵심 개요`,
                   analogy: '새로운 게임을 시작할 때 조작법과 룰북을 익히는 단계입니다.',
                   summary: [
                     '전체적인 출제/학습 흐름을 파악합니다.',
                     '가장 배점이 높은 핵심 영역을 먼저 선점합니다.',
-                    '매일 작은 단위로 분할하여 반복 학습합니다.'
+                    '매일 작은 단위로 분할하여 반복 학습합니다.',
                   ],
                   keyPoints: ['목표 달성을 위한 일일 루틴 고정', '취약 영역 우선 배치'],
-                  coachTip: '처음부터 완벽을 기하기보다 전체 뼈대를 빠르게 1회독하는 것이 효율적입니다.'
+                  coachTip: '처음부터 완벽을 기하기보다 전체 뼈대를 빠르게 1회독하는 것이 효율적입니다.',
                 },
-                quiz: INITIAL_PRESETS[0].days[0].tasks[0].quiz
-              }
-            ]
+                quiz: INITIAL_PRESETS[0].days[0].tasks[0].quiz,
+              },
+            ],
           },
           {
-            dayOfWeek: '화',
-            dayNumber: 2,
-            dateStr: '10.20 (화)',
             title: `${goal} 핵심 이론 집중 학습`,
-            isToday: false,
             tasks: [
               {
                 id: 'custom-2-1',
                 title: `${goal} 2단계: 필수 핵심 원리 정리`,
                 category: '이론 완성',
                 estimatedMinutes: 40,
-                difficulty: '초급',
-                completed: true,
+                difficulty: '초급' as const,
+                completed: false,
                 concept: INITIAL_PRESETS[0].days[1].tasks[0].concept,
-                quiz: INITIAL_PRESETS[0].days[1].tasks[0].quiz
-              }
-            ]
+                quiz: INITIAL_PRESETS[0].days[1].tasks[0].quiz,
+              },
+            ],
           },
           {
-            dayOfWeek: '수',
-            dayNumber: 3,
-            dateStr: '10.21 (수)',
             title: `${goal} 실전 문제 풀이 및 심화`,
-            isToday: true,
             tasks: [
               {
                 id: 'custom-3-1',
                 title: `${goal} 빈출 기출문제 10제 풀이`,
                 category: '실전 적용',
                 estimatedMinutes: 45,
-                difficulty: '중급',
+                difficulty: '중급' as const,
                 completed: false,
                 concept: INITIAL_PRESETS[0].days[2].tasks[0].concept,
-                quiz: INITIAL_PRESETS[0].days[2].tasks[0].quiz
+                quiz: INITIAL_PRESETS[0].days[2].tasks[0].quiz,
               },
               {
                 id: 'custom-3-2',
                 title: `${goal} 오답노트 작성 및 취약점 보완`,
                 category: '약점 보완',
                 estimatedMinutes: 30,
-                difficulty: '중급',
+                difficulty: '중급' as const,
                 completed: false,
                 concept: INITIAL_PRESETS[0].days[2].tasks[1].concept,
-                quiz: INITIAL_PRESETS[0].days[2].tasks[1].quiz
-              }
-            ]
+                quiz: INITIAL_PRESETS[0].days[2].tasks[1].quiz,
+              },
+            ],
           },
           {
-            dayOfWeek: '목',
-            dayNumber: 4,
-            dateStr: '10.22 (목)',
             title: `${goal} 심화 응용 테마 정복`,
-            isToday: false,
             tasks: [
               {
                 id: 'custom-4-1',
                 title: `${goal} 고난도 단골 함정 유형 분석`,
                 category: '심화 응용',
                 estimatedMinutes: 40,
-                difficulty: '중급',
+                difficulty: '중급' as const,
                 completed: false,
                 concept: INITIAL_PRESETS[0].days[3].tasks[0].concept,
-                quiz: INITIAL_PRESETS[0].days[3].tasks[0].quiz
-              }
-            ]
+                quiz: INITIAL_PRESETS[0].days[3].tasks[0].quiz,
+              },
+            ],
           },
           {
-            dayOfWeek: '금',
-            dayNumber: 5,
-            dateStr: '10.23 (금)',
             title: `${goal} 실전 모의고사 1회`,
-            isToday: false,
             tasks: [
               {
                 id: 'custom-5-1',
                 title: `${goal} 실전 타이머 모의평가`,
                 category: '실전 감각',
                 estimatedMinutes: 45,
-                difficulty: '중급',
+                difficulty: '중급' as const,
                 completed: false,
                 concept: INITIAL_PRESETS[0].days[4].tasks[0].concept,
-                quiz: INITIAL_PRESETS[0].days[4].tasks[0].quiz
-              }
-            ]
+                quiz: INITIAL_PRESETS[0].days[4].tasks[0].quiz,
+              },
+            ],
           },
           {
-            dayOfWeek: '토',
-            dayNumber: 6,
-            dateStr: '10.24 (토)',
             title: `${goal} 1주차 종합 복습`,
-            isToday: false,
             tasks: [
               {
                 id: 'custom-6-1',
                 title: `${goal} 전체 핵심 키워드 마인드맵`,
                 category: '총정리',
                 estimatedMinutes: 40,
-                difficulty: '초급',
+                difficulty: '초급' as const,
                 completed: false,
                 concept: INITIAL_PRESETS[0].days[5].tasks[0].concept,
-                quiz: INITIAL_PRESETS[0].days[5].tasks[0].quiz
-              }
-            ]
+                quiz: INITIAL_PRESETS[0].days[5].tasks[0].quiz,
+              },
+            ],
           },
           {
-            dayOfWeek: '일',
-            dayNumber: 7,
-            dateStr: '10.25 (일)',
             title: `${goal} 주간 피드백 및 다음 주 플래닝`,
-            isToday: false,
             tasks: [
               {
                 id: 'custom-7-1',
                 title: `${goal} 학습 달성률 점검 및 피드백`,
                 category: '주간 회고',
                 estimatedMinutes: 30,
-                difficulty: '초급',
+                difficulty: '초급' as const,
                 completed: false,
                 concept: INITIAL_PRESETS[0].days[6].tasks[0].concept,
-                quiz: INITIAL_PRESETS[0].days[6].tasks[0].quiz
-              }
-            ]
-          }
+                quiz: INITIAL_PRESETS[0].days[6].tasks[0].quiz,
+              },
+            ],
+          },
         ];
+
+        generatedDays = fallbackTemplates.map((template, idx) => ({
+          dayOfWeek: upcomingDays[idx].dayOfWeek,
+          dayNumber: upcomingDays[idx].dayNumber,
+          dateStr: upcomingDays[idx].dateStr,
+          title: template.title,
+          isToday: upcomingDays[idx].isToday,
+          tasks: template.tasks,
+        }));
       }
     }
 
