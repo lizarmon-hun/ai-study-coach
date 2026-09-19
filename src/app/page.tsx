@@ -1,16 +1,27 @@
 'use client';
 
-import React, { useState } from 'react';
+import React, { useState, useEffect } from 'react';
 import confetti from 'canvas-confetti';
-import { Bot, Flame, KeyRound, Sparkles, X, CheckCircle2 } from 'lucide-react';
+import { Bot, Flame, KeyRound, Sparkles, X, CheckCircle2, CloudCheck } from 'lucide-react';
 import { Header } from '../components/Header';
 import { GoalPlanner } from '../components/GoalPlanner';
 import { WeeklySchedule } from '../components/WeeklySchedule';
 import { TodayTodoList } from '../components/TodayTodoList';
 import { ConceptModal } from '../components/ConceptModal';
 import { QuizModal } from '../components/QuizModal';
+import { PlanHistoryModal } from '../components/PlanHistoryModal';
 import { INITIAL_PRESETS } from '../data/mockData';
 import { DayPlan, Task, ConceptDetail, QuizItem } from '../types';
+import {
+  SavedPlan,
+  getActivePlan,
+  getAllPlans,
+  saveStudyPlan,
+  updatePlanDays,
+  setActivePlan,
+  deletePlan,
+  isSupabaseConfigured,
+} from '../lib/supabase';
 
 export default function Home() {
   const [selectedPresetId, setSelectedPresetId] = useState<string>('infosec');
@@ -25,9 +36,47 @@ export default function Home() {
   const initialTodayIndex = INITIAL_PRESETS[0].days.findIndex((d) => d.isToday);
   const [selectedDayIndex, setSelectedDayIndex] = useState<number>(initialTodayIndex >= 0 ? initialTodayIndex : 0);
 
+  // Persistence state
+  const [currentPlanId, setCurrentPlanId] = useState<string | null>(null);
+  const [savedPlans, setSavedPlans] = useState<SavedPlan[]>([]);
+  const [isHistoryOpen, setIsHistoryOpen] = useState<boolean>(false);
+  const [isCloudSynced] = useState<boolean>(() => isSupabaseConfigured());
+
   // Modals state
   const [conceptTask, setConceptTask] = useState<Task | null>(null);
   const [quizTask, setQuizTask] = useState<Task | null>(null);
+
+  // 1. Initial Mount: Load active plan & all saved plans from DB / localStorage
+  useEffect(() => {
+    async function loadData() {
+      try {
+        const [active, all] = await Promise.all([getActivePlan(), getAllPlans()]);
+        setSavedPlans(all);
+
+        if (active) {
+          setCurrentPlanId(active.id);
+          setGoal(active.goal);
+          setHours(active.hours);
+          setDays(active.days);
+          const todayIdx = active.days.findIndex((d) => d.isToday);
+          setSelectedDayIndex(todayIdx >= 0 ? todayIdx : 0);
+        } else {
+          // Initialize with default plan in DB/localStorage
+          const initial = await saveStudyPlan(
+            INITIAL_PRESETS[0].name,
+            INITIAL_PRESETS[0].defaultHours,
+            INITIAL_PRESETS[0].days
+          );
+          setCurrentPlanId(initial.id);
+          setSavedPlans([initial]);
+        }
+      } catch (err) {
+        console.warn('Initial plan load failed:', err);
+      }
+    }
+
+    loadData();
+  }, []);
 
   // Selected Day & Today
   const selectedDay = days[selectedDayIndex] || days[0];
@@ -37,7 +86,7 @@ export default function Home() {
   const todayCompletedCount = todayDay.tasks.filter((t) => t.completed).length;
   const todayTotalCount = todayDay.tasks.length;
 
-  // Toggle task status
+  // Toggle task status and sync to DB
   const handleToggleTask = (taskId: string) => {
     setDays((prevDays) => {
       const nextDays = prevDays.map((day) => ({
@@ -69,12 +118,20 @@ export default function Home() {
         }
       }
 
+      // Sync to database
+      if (currentPlanId) {
+        updatePlanDays(currentPlanId, nextDays).then(() => {
+          // refresh saved plans list in background
+          getAllPlans().then(setSavedPlans);
+        });
+      }
+
       return nextDays;
     });
   };
 
   // Switch presets
-  const handleSelectPreset = (presetId: string) => {
+  const handleSelectPreset = async (presetId: string) => {
     const found = INITIAL_PRESETS.find((p) => p.id === presetId);
     if (!found) return;
     setSelectedPresetId(presetId);
@@ -84,13 +141,25 @@ export default function Home() {
     const todayIdx = found.days.findIndex((d) => d.isToday);
     setSelectedDayIndex(todayIdx >= 0 ? todayIdx : 0);
     setGenerationSuccessNotice(null);
+
+    // Save as current active plan
+    try {
+      const saved = await saveStudyPlan(found.name, found.defaultHours, found.days);
+      setCurrentPlanId(saved.id);
+      const all = await getAllPlans();
+      setSavedPlans(all);
+    } catch (e) {
+      console.warn('Preset save failed:', e);
+    }
   };
 
-  // Generate Weekly Plan using Gemini API (with Fallback to client-side template)
+  // Generate Weekly Plan using Gemini API (with Fallback & Auto-Save to Supabase)
   const handleGeneratePlan = async () => {
     setIsGenerating(true);
     setApiKeyNotice(null);
     setGenerationSuccessNotice(null);
+
+    let generatedDays: DayPlan[] | null = null;
 
     try {
       const res = await fetch('/api/plan', {
@@ -102,15 +171,9 @@ export default function Home() {
       const data = await res.json();
 
       if (res.ok && data.days && Array.isArray(data.days) && data.days.length > 0) {
-        setDays(data.days);
-        const todayIdx = data.days.findIndex((d: DayPlan) => d.isToday);
-        setSelectedDayIndex(todayIdx >= 0 ? todayIdx : 0);
-        setGenerationSuccessNotice(`✨ Google Gemini AI가 '${goal}' 목표(${hours}/일)에 맞춘 실전 7일 주간 플랜을 성공적으로 생성했습니다!`);
-        setIsGenerating(false);
-        return;
-      }
-
-      if (data.error === 'MISSING_API_KEY') {
+        generatedDays = data.days;
+        setGenerationSuccessNotice(`✨ Google Gemini AI가 '${goal}' 목표(${hours}/일)에 맞춘 실전 7일 주간 플랜을 성공적으로 생성 및 저장했습니다!`);
+      } else if (data.error === 'MISSING_API_KEY') {
         setApiKeyNotice('💡 GEMINI_API_KEY가 아직 설정되지 않아 기본 템플릿(데모 모드)으로 플랜을 생성했습니다. .env.local 파일에 키를 입력하시면 Gemini AI가 실시간으로 완전 맞춤형 주간 플랜을 생성합니다.');
       } else {
         setApiKeyNotice(data.message || 'AI 플랜 생성 중 오류가 발생하여 기본 템플릿으로 대체되었습니다.');
@@ -119,176 +182,188 @@ export default function Home() {
       setApiKeyNotice('네트워크 연결 문제로 인해 기본 템플릿으로 주간 플랜이 생성되었습니다.');
     }
 
-    // Fallback: Generate template plan
-    const matchedPreset = INITIAL_PRESETS.find((p) => p.name === goal || p.id === selectedPresetId);
-    if (matchedPreset) {
-      setDays(matchedPreset.days);
-      const todayIdx = matchedPreset.days.findIndex((d) => d.isToday);
-      setSelectedDayIndex(todayIdx >= 0 ? todayIdx : 0);
-    } else {
-      const customDays: DayPlan[] = [
-        {
-          dayOfWeek: '월',
-          dayNumber: 1,
-          dateStr: '10.19 (월)',
-          title: `${goal} 기초 개념 및 오리엔테이션`,
-          isToday: false,
-          tasks: [
-            {
-              id: 'custom-1-1',
-              title: `${goal} 1단계: 핵심 용어 및 구조 파악`,
-              category: '기초 입문',
-              estimatedMinutes: 30,
-              difficulty: '초급',
-              completed: true,
-              concept: {
-                topic: `${goal} 핵심 개요`,
-                analogy: '새로운 게임을 시작할 때 조작법과 룰북을 익히는 단계입니다.',
-                summary: [
-                  '전체적인 출제/학습 흐름을 파악합니다.',
-                  '가장 배점이 높은 핵심 영역을 먼저 선점합니다.',
-                  '매일 작은 단위로 분할하여 반복 학습합니다.'
-                ],
-                keyPoints: ['목표 달성을 위한 일일 루틴 고정', '취약 영역 우선 배치'],
-                coachTip: '처음부터 완벽을 기하기보다 전체 뼈대를 빠르게 1회독하는 것이 효율적입니다.'
+    // Fallback: Generate template plan if Gemini didn't return days
+    if (!generatedDays) {
+      const matchedPreset = INITIAL_PRESETS.find((p) => p.name === goal || p.id === selectedPresetId);
+      if (matchedPreset) {
+        generatedDays = matchedPreset.days;
+      } else {
+        generatedDays = [
+          {
+            dayOfWeek: '월',
+            dayNumber: 1,
+            dateStr: '10.19 (월)',
+            title: `${goal} 기초 개념 및 오리엔테이션`,
+            isToday: false,
+            tasks: [
+              {
+                id: 'custom-1-1',
+                title: `${goal} 1단계: 핵심 용어 및 구조 파악`,
+                category: '기초 입문',
+                estimatedMinutes: 30,
+                difficulty: '초급',
+                completed: true,
+                concept: {
+                  topic: `${goal} 핵심 개요`,
+                  analogy: '새로운 게임을 시작할 때 조작법과 룰북을 익히는 단계입니다.',
+                  summary: [
+                    '전체적인 출제/학습 흐름을 파악합니다.',
+                    '가장 배점이 높은 핵심 영역을 먼저 선점합니다.',
+                    '매일 작은 단위로 분할하여 반복 학습합니다.'
+                  ],
+                  keyPoints: ['목표 달성을 위한 일일 루틴 고정', '취약 영역 우선 배치'],
+                  coachTip: '처음부터 완벽을 기하기보다 전체 뼈대를 빠르게 1회독하는 것이 효율적입니다.'
+                },
+                quiz: INITIAL_PRESETS[0].days[0].tasks[0].quiz
+              }
+            ]
+          },
+          {
+            dayOfWeek: '화',
+            dayNumber: 2,
+            dateStr: '10.20 (화)',
+            title: `${goal} 핵심 이론 집중 학습`,
+            isToday: false,
+            tasks: [
+              {
+                id: 'custom-2-1',
+                title: `${goal} 2단계: 필수 핵심 원리 정리`,
+                category: '이론 완성',
+                estimatedMinutes: 40,
+                difficulty: '초급',
+                completed: true,
+                concept: INITIAL_PRESETS[0].days[1].tasks[0].concept,
+                quiz: INITIAL_PRESETS[0].days[1].tasks[0].quiz
+              }
+            ]
+          },
+          {
+            dayOfWeek: '수',
+            dayNumber: 3,
+            dateStr: '10.21 (수)',
+            title: `${goal} 실전 문제 풀이 및 심화`,
+            isToday: true,
+            tasks: [
+              {
+                id: 'custom-3-1',
+                title: `${goal} 빈출 기출문제 10제 풀이`,
+                category: '실전 적용',
+                estimatedMinutes: 45,
+                difficulty: '중급',
+                completed: false,
+                concept: INITIAL_PRESETS[0].days[2].tasks[0].concept,
+                quiz: INITIAL_PRESETS[0].days[2].tasks[0].quiz
               },
-              quiz: INITIAL_PRESETS[0].days[0].tasks[0].quiz
-            }
-          ]
-        },
-        {
-          dayOfWeek: '화',
-          dayNumber: 2,
-          dateStr: '10.20 (화)',
-          title: `${goal} 핵심 이론 집중 학습`,
-          isToday: false,
-          tasks: [
-            {
-              id: 'custom-2-1',
-              title: `${goal} 2단계: 필수 핵심 원리 정리`,
-              category: '이론 완성',
-              estimatedMinutes: 40,
-              difficulty: '초급',
-              completed: true,
-              concept: INITIAL_PRESETS[0].days[1].tasks[0].concept,
-              quiz: INITIAL_PRESETS[0].days[1].tasks[0].quiz
-            }
-          ]
-        },
-        {
-          dayOfWeek: '수',
-          dayNumber: 3,
-          dateStr: '10.21 (수)',
-          title: `${goal} 실전 문제 풀이 및 심화`,
-          isToday: true,
-          tasks: [
-            {
-              id: 'custom-3-1',
-              title: `${goal} 빈출 기출문제 10제 풀이`,
-              category: '실전 적용',
-              estimatedMinutes: 45,
-              difficulty: '중급',
-              completed: false,
-              concept: INITIAL_PRESETS[0].days[2].tasks[0].concept,
-              quiz: INITIAL_PRESETS[0].days[2].tasks[0].quiz
-            },
-            {
-              id: 'custom-3-2',
-              title: `${goal} 오답노트 작성 및 취약점 보완`,
-              category: '약점 보완',
-              estimatedMinutes: 30,
-              difficulty: '중급',
-              completed: false,
-              concept: INITIAL_PRESETS[0].days[2].tasks[1].concept,
-              quiz: INITIAL_PRESETS[0].days[2].tasks[1].quiz
-            }
-          ]
-        },
-        {
-          dayOfWeek: '목',
-          dayNumber: 4,
-          dateStr: '10.22 (목)',
-          title: `${goal} 심화 응용 테마 정복`,
-          isToday: false,
-          tasks: [
-            {
-              id: 'custom-4-1',
-              title: `${goal} 고난도 단골 함정 유형 분석`,
-              category: '심화 응용',
-              estimatedMinutes: 40,
-              difficulty: '중급',
-              completed: false,
-              concept: INITIAL_PRESETS[0].days[3].tasks[0].concept,
-              quiz: INITIAL_PRESETS[0].days[3].tasks[0].quiz
-            }
-          ]
-        },
-        {
-          dayOfWeek: '금',
-          dayNumber: 5,
-          dateStr: '10.23 (금)',
-          title: `${goal} 실전 모의고사 1회`,
-          isToday: false,
-          tasks: [
-            {
-              id: 'custom-5-1',
-              title: `${goal} 실전 타이머 모의평가`,
-              category: '실전 감각',
-              estimatedMinutes: 45,
-              difficulty: '중급',
-              completed: false,
-              concept: INITIAL_PRESETS[0].days[4].tasks[0].concept,
-              quiz: INITIAL_PRESETS[0].days[4].tasks[0].quiz
-            }
-          ]
-        },
-        {
-          dayOfWeek: '토',
-          dayNumber: 6,
-          dateStr: '10.24 (토)',
-          title: `${goal} 1주차 종합 복습`,
-          isToday: false,
-          tasks: [
-            {
-              id: 'custom-6-1',
-              title: `${goal} 전체 핵심 키워드 마인드맵`,
-              category: '총정리',
-              estimatedMinutes: 40,
-              difficulty: '초급',
-              completed: false,
-              concept: INITIAL_PRESETS[0].days[5].tasks[0].concept,
-              quiz: INITIAL_PRESETS[0].days[5].tasks[0].quiz
-            }
-          ]
-        },
-        {
-          dayOfWeek: '일',
-          dayNumber: 7,
-          dateStr: '10.25 (일)',
-          title: `${goal} 주간 피드백 및 다음 주 플래닝`,
-          isToday: false,
-          tasks: [
-            {
-              id: 'custom-7-1',
-              title: `${goal} 학습 달성률 점검 및 피드백`,
-              category: '주간 회고',
-              estimatedMinutes: 30,
-              difficulty: '초급',
-              completed: false,
-              concept: INITIAL_PRESETS[0].days[6].tasks[0].concept,
-              quiz: INITIAL_PRESETS[0].days[6].tasks[0].quiz
-            }
-          ]
-        }
-      ];
-      setDays(customDays);
-      setSelectedDayIndex(2); // Day 3
+              {
+                id: 'custom-3-2',
+                title: `${goal} 오답노트 작성 및 취약점 보완`,
+                category: '약점 보완',
+                estimatedMinutes: 30,
+                difficulty: '중급',
+                completed: false,
+                concept: INITIAL_PRESETS[0].days[2].tasks[1].concept,
+                quiz: INITIAL_PRESETS[0].days[2].tasks[1].quiz
+              }
+            ]
+          },
+          {
+            dayOfWeek: '목',
+            dayNumber: 4,
+            dateStr: '10.22 (목)',
+            title: `${goal} 심화 응용 테마 정복`,
+            isToday: false,
+            tasks: [
+              {
+                id: 'custom-4-1',
+                title: `${goal} 고난도 단골 함정 유형 분석`,
+                category: '심화 응용',
+                estimatedMinutes: 40,
+                difficulty: '중급',
+                completed: false,
+                concept: INITIAL_PRESETS[0].days[3].tasks[0].concept,
+                quiz: INITIAL_PRESETS[0].days[3].tasks[0].quiz
+              }
+            ]
+          },
+          {
+            dayOfWeek: '금',
+            dayNumber: 5,
+            dateStr: '10.23 (금)',
+            title: `${goal} 실전 모의고사 1회`,
+            isToday: false,
+            tasks: [
+              {
+                id: 'custom-5-1',
+                title: `${goal} 실전 타이머 모의평가`,
+                category: '실전 감각',
+                estimatedMinutes: 45,
+                difficulty: '중급',
+                completed: false,
+                concept: INITIAL_PRESETS[0].days[4].tasks[0].concept,
+                quiz: INITIAL_PRESETS[0].days[4].tasks[0].quiz
+              }
+            ]
+          },
+          {
+            dayOfWeek: '토',
+            dayNumber: 6,
+            dateStr: '10.24 (토)',
+            title: `${goal} 1주차 종합 복습`,
+            isToday: false,
+            tasks: [
+              {
+                id: 'custom-6-1',
+                title: `${goal} 전체 핵심 키워드 마인드맵`,
+                category: '총정리',
+                estimatedMinutes: 40,
+                difficulty: '초급',
+                completed: false,
+                concept: INITIAL_PRESETS[0].days[5].tasks[0].concept,
+                quiz: INITIAL_PRESETS[0].days[5].tasks[0].quiz
+              }
+            ]
+          },
+          {
+            dayOfWeek: '일',
+            dayNumber: 7,
+            dateStr: '10.25 (일)',
+            title: `${goal} 주간 피드백 및 다음 주 플래닝`,
+            isToday: false,
+            tasks: [
+              {
+                id: 'custom-7-1',
+                title: `${goal} 학습 달성률 점검 및 피드백`,
+                category: '주간 회고',
+                estimatedMinutes: 30,
+                difficulty: '초급',
+                completed: false,
+                concept: INITIAL_PRESETS[0].days[6].tasks[0].concept,
+                quiz: INITIAL_PRESETS[0].days[6].tasks[0].quiz
+              }
+            ]
+          }
+        ];
+      }
+    }
+
+    setDays(generatedDays);
+    const todayIdx = generatedDays.findIndex((d) => d.isToday);
+    setSelectedDayIndex(todayIdx >= 0 ? todayIdx : 0);
+
+    // Save to Database (Supabase / LocalStorage)
+    try {
+      const saved = await saveStudyPlan(goal, hours, generatedDays);
+      setCurrentPlanId(saved.id);
+      const all = await getAllPlans();
+      setSavedPlans(all);
+    } catch (e) {
+      console.warn('Auto save plan failed:', e);
     }
 
     setIsGenerating(false);
   };
 
-  // Add custom task to current day
+  // Add custom task to current day and persist
   const handleAddTask = (title: string, category: string, minutes: number) => {
     const newTask: Task = {
       id: `task-custom-${Date.now()}`,
@@ -314,8 +389,8 @@ export default function Home() {
       quiz: INITIAL_PRESETS[0].days[2].tasks[0].quiz
     };
 
-    setDays((prevDays) =>
-      prevDays.map((d, idx) => {
+    setDays((prevDays) => {
+      const nextDays = prevDays.map((d, idx) => {
         if (idx === selectedDayIndex) {
           return {
             ...d,
@@ -323,27 +398,68 @@ export default function Home() {
           };
         }
         return d;
-      })
-    );
+      });
+
+      if (currentPlanId) {
+        updatePlanDays(currentPlanId, nextDays).then(() => {
+          getAllPlans().then(setSavedPlans);
+        });
+      }
+
+      return nextDays;
+    });
   };
 
-  // Keep modified concept/quiz in current days state
+  // Keep modified concept/quiz in current days state & sync
   const handleUpdateTaskConcept = (taskId: string, updatedConcept: ConceptDetail) => {
-    setDays((prev) =>
-      prev.map((d) => ({
+    setDays((prev) => {
+      const nextDays = prev.map((d) => ({
         ...d,
         tasks: d.tasks.map((t) => (t.id === taskId ? { ...t, concept: updatedConcept } : t)),
-      }))
-    );
+      }));
+      if (currentPlanId) {
+        updatePlanDays(currentPlanId, nextDays);
+      }
+      return nextDays;
+    });
   };
 
   const handleUpdateTaskQuizzes = (taskId: string, updatedQuizzes: QuizItem[]) => {
-    setDays((prev) =>
-      prev.map((d) => ({
+    setDays((prev) => {
+      const nextDays = prev.map((d) => ({
         ...d,
         tasks: d.tasks.map((t) => (t.id === taskId ? { ...t, quiz: updatedQuizzes } : t)),
-      }))
-    );
+      }));
+      if (currentPlanId) {
+        updatePlanDays(currentPlanId, nextDays);
+      }
+      return nextDays;
+    });
+  };
+
+  // Switch to a plan from History
+  const handleSelectSavedPlan = async (plan: SavedPlan) => {
+    setCurrentPlanId(plan.id);
+    setGoal(plan.goal);
+    setHours(plan.hours);
+    setDays(plan.days);
+    const todayIdx = plan.days.findIndex((d) => d.isToday);
+    setSelectedDayIndex(todayIdx >= 0 ? todayIdx : 0);
+    await setActivePlan(plan.id);
+    const all = await getAllPlans();
+    setSavedPlans(all);
+  };
+
+  // Delete plan from History
+  const handleDeleteSavedPlan = async (id: string) => {
+    await deletePlan(id);
+    const all = await getAllPlans();
+    setSavedPlans(all);
+    if (currentPlanId === id) {
+      if (all.length > 0) {
+        handleSelectSavedPlan(all[0]);
+      }
+    }
   };
 
   return (
@@ -354,6 +470,9 @@ export default function Home() {
         dailyHours={hours}
         completedTasksCount={todayCompletedCount}
         totalTasksCount={todayTotalCount}
+        onOpenHistory={() => setIsHistoryOpen(true)}
+        savedPlansCount={savedPlans.length}
+        isCloudSynced={isCloudSynced}
       />
 
       {/* Main Content Area */}
@@ -372,7 +491,7 @@ export default function Home() {
             </div>
             <button
               onClick={() => setApiKeyNotice(null)}
-              className="p-1 rounded-lg hover:bg-amber-100 dark:hover:bg-amber-900 text-amber-600 transition-colors"
+              className="p-1 rounded-lg hover:bg-amber-100 dark:hover:bg-amber-900 text-amber-600 transition-colors cursor-pointer"
               aria-label="알림 닫기"
             >
               <X className="w-4 h-4" />
@@ -389,7 +508,7 @@ export default function Home() {
             </div>
             <button
               onClick={() => setGenerationSuccessNotice(null)}
-              className="p-1 rounded-lg hover:bg-emerald-100 dark:hover:bg-emerald-900 text-emerald-600 transition-colors"
+              className="p-1 rounded-lg hover:bg-emerald-100 dark:hover:bg-emerald-900 text-emerald-600 transition-colors cursor-pointer"
               aria-label="알림 닫기"
             >
               <X className="w-4 h-4" />
@@ -404,22 +523,30 @@ export default function Home() {
               <Bot className="w-5 h-5" />
             </div>
             <div>
-              <h2 className="text-sm font-bold text-slate-900 dark:text-white flex items-center gap-1.5">
-                <span>Google Gemini 기반 AI 학습 코치</span>
-                <span className="inline-flex items-center px-1.5 py-0.5 rounded text-[10px] font-bold bg-indigo-100 dark:bg-indigo-950 text-indigo-700 dark:text-indigo-300">
-                  <Sparkles className="w-2.5 h-2.5 mr-1" />
-                  Gemini Flash
-                </span>
-              </h2>
+              <div className="flex items-center space-x-2">
+                <h2 className="text-sm font-bold text-slate-900 dark:text-white flex items-center gap-1.5">
+                  <span>Google Gemini & Supabase AI 코치</span>
+                  <span className="inline-flex items-center px-1.5 py-0.5 rounded text-[10px] font-bold bg-indigo-100 dark:bg-indigo-950 text-indigo-700 dark:text-indigo-300">
+                    <Sparkles className="w-2.5 h-2.5 mr-1" />
+                    Gemini Flash
+                  </span>
+                </h2>
+                {isCloudSynced && (
+                  <span className="inline-flex items-center gap-1 text-[10px] font-bold px-1.5 py-0.5 rounded bg-emerald-50 text-emerald-700 dark:bg-emerald-950/60 dark:text-emerald-300 border border-emerald-200 dark:border-emerald-800">
+                    <CloudCheck className="w-3 h-3" />
+                    클라우드 저장 활성화
+                  </span>
+                )}
+              </div>
               <p className="text-xs text-slate-600 dark:text-slate-300 mt-0.5">
-                오늘의 핵심은 <strong className="text-indigo-600 dark:text-indigo-400 font-bold">{todayDay.title}</strong>입니다. 태스크마다 우측의 [초보용 개념 설명]과 [퀴즈 5문제]를 통해 완전학습을 달성하세요!
+                오늘의 핵심은 <strong className="text-indigo-600 dark:text-indigo-400 font-bold">{todayDay.title}</strong>입니다. 태스크 완료 시 자동으로 상태가 저장되며, 상단 [내 플랜]에서 언제든 이전 기록을 확인하실 수 있습니다!
               </p>
             </div>
           </div>
 
           <div className="flex items-center space-x-2 text-xs text-slate-500 dark:text-slate-400 shrink-0">
             <Flame className="w-4 h-4 text-orange-500" />
-            <span>오늘 권장 페이스 유지 중</span>
+            <span>학습 진도 실시간 저장 중</span>
           </div>
         </div>
 
@@ -457,7 +584,7 @@ export default function Home() {
 
       {/* Footer */}
       <footer className="mt-auto border-t border-slate-200/70 dark:border-slate-800 bg-white/50 dark:bg-slate-900/50 py-6 text-center text-xs text-slate-400 dark:text-slate-500">
-        <p>AI 학습·습관 코치 웹앱 (AI Study & Habit Coach) • Powered by Google Gemini & Next.js</p>
+        <p>AI 학습·습관 코치 웹앱 (AI Study & Habit Coach) • Powered by Google Gemini & PostgreSQL</p>
       </footer>
 
       {/* Interactive Modal 1: Beginner Concept Explanation */}
@@ -499,6 +626,16 @@ export default function Home() {
             handleToggleTask(quizTask.id);
           }
         }}
+      />
+
+      {/* Plan History Vault Modal */}
+      <PlanHistoryModal
+        isOpen={isHistoryOpen}
+        onClose={() => setIsHistoryOpen(false)}
+        plans={savedPlans}
+        activePlanId={currentPlanId}
+        onSelectPlan={handleSelectSavedPlan}
+        onDeletePlan={handleDeleteSavedPlan}
       />
     </div>
   );

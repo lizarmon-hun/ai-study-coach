@@ -1,13 +1,15 @@
 'use client';
 
-import React from 'react';
-import { Sparkles, Flame, Clock, CheckCircle2, Target } from 'lucide-react';
+import { Sparkles, Flame, Clock, CheckCircle2, Target, FolderArchive } from 'lucide-react';
 
 interface HeaderProps {
   currentGoal: string;
   dailyHours: string;
   completedTasksCount: number;
   totalTasksCount: number;
+  onOpenHistory?: () => void;
+  savedPlansCount?: number;
+  isCloudSynced?: boolean;
 }
 
 export const Header: React.FC<HeaderProps> = ({
@@ -15,6 +17,9 @@ export const Header: React.FC<HeaderProps> = ({
   dailyHours,
   completedTasksCount,
   totalTasksCount,
+  onOpenHistory,
+  savedPlansCount = 0,
+  isCloudSynced = false,
 }) => {
   const isAllCompleted = totalTasksCount > 0 && completedTasksCount === totalTasksCount;
 
@@ -35,6 +40,11 @@ export const Header: React.FC<HeaderProps> = ({
                 <span className="inline-flex items-center px-2 py-0.5 rounded-full text-xs font-semibold bg-indigo-50 text-indigo-700 dark:bg-indigo-950/60 dark:text-indigo-300 border border-indigo-200/60 dark:border-indigo-800">
                   MVP
                 </span>
+                {isCloudSynced && (
+                  <span className="inline-flex items-center px-2 py-0.5 rounded-full text-[10px] font-bold bg-emerald-50 text-emerald-700 dark:bg-emerald-950/60 dark:text-emerald-300 border border-emerald-200 dark:border-emerald-800">
+                    클라우드 연동됨
+                  </span>
+                )}
               </div>
               <p className="text-xs text-slate-500 dark:text-slate-400 hidden sm:block">
                 초개인화 AI 학습 & 습관 메이커
@@ -62,6 +72,24 @@ export const Header: React.FC<HeaderProps> = ({
               <Clock className="w-3.5 h-3.5 text-slate-500" />
               <span>목표: {dailyHours}/일</span>
             </div>
+
+            {/* Plan History Vault Button */}
+            {onOpenHistory && (
+              <button
+                type="button"
+                onClick={onOpenHistory}
+                className="flex items-center space-x-1.5 px-3 py-1.5 rounded-full bg-indigo-50 hover:bg-indigo-100 dark:bg-indigo-950/60 dark:hover:bg-indigo-900/80 text-indigo-700 dark:text-indigo-300 border border-indigo-200/80 dark:border-indigo-800 text-xs font-semibold shadow-xs transition-all active:scale-[0.98] cursor-pointer"
+                title="저장된 학습 플랜 보관함 열기"
+              >
+                <FolderArchive className="w-3.5 h-3.5 text-indigo-600 dark:text-indigo-400" />
+                <span>내 플랜</span>
+                {savedPlansCount > 0 && (
+                  <span className="w-4 h-4 rounded-full bg-indigo-600 text-white text-[10px] font-bold flex items-center justify-center">
+                    {savedPlansCount}
+                  </span>
+                )}
+              </button>
+            )}
 
             {/* Status Chip */}
             <div className={`hidden sm:flex items-center space-x-1.5 px-3 py-1.5 rounded-full text-xs font-semibold border ${
